@@ -1,7 +1,3 @@
-"""
-VaultGuard Client Application
-Client-side password management with encryption
-"""
 import json
 import hashlib
 import base64
@@ -16,11 +12,9 @@ from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 import hmac
 import time
 
-# Logging setup
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -31,9 +25,8 @@ class VaultGuardClient:
         self.vault_file = 'vault_data.json'
         self.vault_key = None
         self.session_token = None
-        self.verify_ssl = False  # Set to True in production
+        self.verify_ssl = False
         
-        # Requests session with SSL
         self.session = requests.Session()
         self.session.verify = self.verify_ssl
         if not self.verify_ssl:
@@ -41,7 +34,6 @@ class VaultGuardClient:
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
     
     def derive_key(self, master_password, salt=None):
-        """Derive encryption key from master password"""
         if salt is None:
             salt = os.urandom(16)
         
@@ -54,33 +46,56 @@ class VaultGuardClient:
         )
         
         key = base64.urlsafe_b64encode(kdf.derive(master_password.encode()))
+        
+        if len(key) != 44:
+            print(f"Warning: Key size is {len(key)} bytes, trimming to 32 bytes")
+            key_bytes = base64.urlsafe_b64decode(key)
+            if len(key_bytes) > 32:
+                key_bytes = key_bytes[:32]
+            elif len(key_bytes) < 32:
+                key_bytes = key_bytes + b'0' * (32 - len(key_bytes))
+            key = base64.urlsafe_b64encode(key_bytes)
+        
         return key, salt
     
+    def check_and_fix_key(self):
+        if len(self.vault_key) != 44:
+            print(f"Key size error: {len(self.vault_key)} bytes (should be 44 for Fernet)")
+            try:
+                key_bytes = base64.urlsafe_b64decode(self.vault_key + '=' * (4 - len(self.vault_key) % 4))
+                if len(key_bytes) != 32:
+                    print(f"Key bytes: {len(key_bytes)} (should be 32)")
+                    if len(key_bytes) > 32:
+                        key_bytes = key_bytes[:32]
+                    else:
+                        key_bytes = key_bytes + b'0' * (32 - len(key_bytes))
+                    self.vault_key = base64.urlsafe_b64encode(key_bytes)
+                print(f"Fixed key size: {len(self.vault_key)} bytes")
+            except:
+                self.vault_key = Fernet.generate_key()
+                print("Generated new Fernet key")
+    
     def encrypt_data(self, data, key):
-        """Encrypt data using AES"""
-        json_data = json.dumps(data).encode('utf-8')
-        iv = os.urandom(16)
-        cipher = Cipher(algorithms.AES(key), modes.CFB(iv), backend=default_backend())
-        encryptor = cipher.encryptor()
-        encrypted_data = encryptor.update(json_data) + encryptor.finalize()
-        return base64.b64encode(iv + encrypted_data).decode('utf-8')
+        try:
+            json_data = json.dumps(data).encode('utf-8')
+            fernet = Fernet(key)
+            encrypted_data = fernet.encrypt(json_data)
+            return base64.b64encode(encrypted_data).decode('utf-8')
+        except Exception as e:
+            logger.error(f"Encryption error: {e}")
+            return None
     
     def decrypt_data(self, encrypted_data, key):
-        """Decrypt AES-encrypted data"""
         try:
             data = base64.b64decode(encrypted_data)
-            iv = data[:16]
-            ciphertext = data[16:]
-            cipher = Cipher(algorithms.AES(key), modes.CFB(iv), backend=default_backend())
-            decryptor = cipher.decryptor()
-            decrypted_data = decryptor.update(ciphertext) + decryptor.finalize()
+            fernet = Fernet(key)
+            decrypted_data = fernet.decrypt(data)
             return json.loads(decrypted_data.decode('utf-8'))
         except Exception as e:
-            logger.error(f"Decryption failed: {e}")
+            logger.error(f"Decryption error: {e}")
             return None
     
     def calculate_file_hash(self, filename):
-        """Calculate file hash to verify integrity"""
         sha256_hash = hashlib.sha256()
         
         try:
@@ -92,7 +107,6 @@ class VaultGuardClient:
             return None
     
     def verify_vault_integrity(self):
-        """Verify vault file integrity"""
         if not os.path.exists(self.vault_file):
             return True
         
@@ -100,7 +114,6 @@ class VaultGuardClient:
         return current_hash is not None
     
     def save_vault(self, vault_data):
-        """Save encrypted vault"""
         if not self.verify_vault_integrity():
             print("Warning: Vault file integrity check failed.")
             response = input("Continue anyway? (yes/no): ").lower()
@@ -109,17 +122,23 @@ class VaultGuardClient:
         
         encrypted_data = self.encrypt_data(vault_data, self.vault_key)
         
+        if encrypted_data is None:
+            print("Error: Failed to encrypt data!")
+            return False
+        
+        vault_info = {
+            'encrypted_data': encrypted_data,
+            'timestamp': datetime.now().isoformat(),
+            'version': '1.0'
+        }
+        
         with open(self.vault_file, 'w') as f:
-            json.dump({
-                'encrypted_data': encrypted_data,
-                'timestamp': datetime.now().isoformat()
-            }, f, indent=2)
+            json.dump(vault_info, f, indent=2)
         
         logger.info("Vault saved successfully")
         return True
     
     def load_vault(self):
-        """Load and decrypt vault"""
         if not os.path.exists(self.vault_file):
             return {'credentials': []}
         
@@ -144,7 +163,6 @@ class VaultGuardClient:
             return None
     
     def register_user(self):
-        """Register a new user"""
         print("\n" + "="*50)
         print("Register New User")
         print("="*50)
@@ -158,6 +176,7 @@ class VaultGuardClient:
             return False
         
         self.vault_key, salt = self.derive_key(master_password)
+        self.check_and_fix_key()
         self.user_id = user_id
         
         user_data = {
@@ -196,7 +215,6 @@ class VaultGuardClient:
         return False
     
     def login(self):
-        """User login"""
         print("\n" + "="*50)
         print("User Login")
         print("="*50)
@@ -205,6 +223,7 @@ class VaultGuardClient:
         master_password = getpass.getpass("Master Password: ")
         
         self.vault_key, _ = self.derive_key(master_password)
+        self.check_and_fix_key()
         self.user_id = user_id
         
         vault_data = self.load_vault()
@@ -278,7 +297,6 @@ class VaultGuardClient:
         return False
     
     def add_credential(self):
-        """Add new credential"""
         if not self.session_token:
             print("You must log in first.")
             return
@@ -316,7 +334,6 @@ class VaultGuardClient:
             print("Failed to save credential.")
     
     def view_credentials(self):
-        """View all stored credentials"""
         if not self.session_token:
             print("You must log in first.")
             return
@@ -342,7 +359,6 @@ class VaultGuardClient:
             print(f"   Created: {cred['created_at']}")
     
     def search_credentials(self):
-        """Search stored credentials"""
         if not self.session_token:
             print("You must log in first.")
             return
@@ -370,7 +386,6 @@ class VaultGuardClient:
             print(f"   Username: {cred['username']}")
     
     def generate_password(self):
-        """Generate a strong password"""
         import string
         import random
         
@@ -378,7 +393,7 @@ class VaultGuardClient:
         print("Password Generator")
         print("="*50)
         
-        length = int(input("Password length (8–32): ") or 16)
+        length = int(input("Password length (8-32): ") or 16)
         length = max(8, min(32, length))
         
         use_uppercase = input("Include uppercase letters? (yes/no): ").lower() == 'yes'
@@ -409,7 +424,6 @@ class VaultGuardClient:
             print("Install 'pyperclip' to enable automatic clipboard copy.")
     
     def show_menu(self):
-        """Show main menu"""
         while True:
             print("\n" + "="*50)
             print("VaultGuard - Secure Password Manager")
@@ -466,11 +480,9 @@ class VaultGuardClient:
                     print("Invalid option.")
     
     def main_loop(self):
-        """Post-login loop"""
         pass
     
     def register_mobile_device(self):
-        """Register mobile device for MFA"""
         print("\n" + "="*50)
         print("Mobile Device Registration")
         print("="*50)
@@ -514,7 +526,6 @@ class VaultGuardClient:
         
         return False
 
-# Main entry
 if __name__ == "__main__":
     client = VaultGuardClient()
     client.show_menu()
