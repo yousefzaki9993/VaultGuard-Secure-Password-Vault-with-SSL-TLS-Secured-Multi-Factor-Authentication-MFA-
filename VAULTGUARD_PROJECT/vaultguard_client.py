@@ -358,6 +358,79 @@ class VaultGuardClient:
             print(f"   URL: {cred.get('url', 'N/A')}")
             print(f"   Created: {cred['created_at']}")
     
+    def edit_credential(self):
+        if not self.session_token:
+            print("You must log in first.")
+            return
+        
+        vault_data = self.load_vault()
+        if not vault_data or 'credentials' not in vault_data:
+            print("No credentials stored.")
+            return
+        
+        credentials = vault_data['credentials']
+        if not credentials:
+            print("No credentials stored.")
+            return
+        
+        print("\n" + "="*50)
+        print("Edit Credential")
+        print("="*50)
+        
+        for i, cred in enumerate(credentials, 1):
+            print(f"\n{i}. {cred['service']}")
+            print(f"   Username: {cred['username']}")
+            print(f"   URL: {cred.get('url', 'N/A')}")
+        
+        try:
+            choice = int(input("\nSelect credential number to edit (0 to cancel): "))
+            if choice == 0:
+                return
+            
+            if choice < 1 or choice > len(credentials):
+                print("Invalid selection.")
+                return
+            
+            cred = credentials[choice - 1]
+            
+            print(f"\nEditing: {cred['service']} ({cred['username']})")
+            print("Leave field empty to keep current value.")
+            
+            service = input(f"Service [{cred['service']}]: ").strip()
+            username = input(f"Username [{cred['username']}]: ").strip()
+            
+            change_pass = input("Change password? (yes/no): ").lower()
+            if change_pass == 'yes':
+                password = getpass.getpass("New Password: ").strip()
+            else:
+                password = cred['password']
+            
+            url = input(f"URL [{cred.get('url', '')}]: ").strip()
+            notes = input(f"Notes [{cred.get('notes', '')}]: ").strip()
+            
+            if service:
+                cred['service'] = service
+            if username:
+                cred['username'] = username
+            if password and change_pass == 'yes':
+                cred['password'] = password
+            if url is not None:
+                cred['url'] = url if url else ""
+            if notes is not None:
+                cred['notes'] = notes if notes else ""
+            
+            cred['updated_at'] = datetime.now().isoformat()
+            
+            if self.save_vault(vault_data):
+                print("Credential updated successfully!")
+            else:
+                print("Failed to save changes.")
+                
+        except ValueError:
+            print("Please enter a valid number.")
+        except Exception as e:
+            print(f"Error: {e}")
+    
     def search_credentials(self):
         if not self.session_token:
             print("You must log in first.")
@@ -439,9 +512,10 @@ class VaultGuardClient:
                 print("1. Add Credential")
                 print("2. View All Credentials")
                 print("3. Search Credentials")
-                print("4. Generate Password")
-                print("5. Check Vault Integrity")
-                print("6. Logout")
+                print("4. Edit Credential")
+                print("5. Generate Password")
+                print("6. Check Vault Integrity")
+                print("7. Logout")
             
             choice = input("\nChoose an option: ")
             
@@ -466,13 +540,15 @@ class VaultGuardClient:
                 elif choice == '3':
                     self.search_credentials()
                 elif choice == '4':
-                    self.generate_password()
+                    self.edit_credential()
                 elif choice == '5':
+                    self.generate_password()
+                elif choice == '6':
                     if self.verify_vault_integrity():
                         print("Vault integrity OK.")
                     else:
                         print("Vault integrity issue detected.")
-                elif choice == '6':
+                elif choice == '7':
                     self.session_token = None
                     self.vault_key = None
                     print("Logged out.")
